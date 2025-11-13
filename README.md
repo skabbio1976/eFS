@@ -43,3 +43,5 @@ func main() {
 ## Anteckningar
 - `fs.FS` gör API:et generellt: funkar med `embed.FS`, `fstest.MapFS`, `os.DirFS`, `fs.Sub`, m.fl.
 - Fil- och katalogrättigheter är 0644 respektive 0755 som standard.
+- `ExtractToTemp()` är thread-safe och kan anropas concurrent från flera goroutines.
+- `cleanup()` är idempotent och thread-safe (använder `sync.Once` internt).

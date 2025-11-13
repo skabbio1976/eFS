@@ -91,11 +91,6 @@ func ExtractToTemp(fsys fs.FS, root string, tempPrefix string) (string, func(), 
 
 // StartCleanupListener starts a goroutine that listens for shutdown signals (e.g., Ctrl+C or SIGTERM)
 // and cleans up the specified directory before exiting the program.
-// This ensures cleanup happens even on abrupt termination via signals.
-// Note: os.Exit is called after cleanup, which skips other defers, but since cleanup is handled here, it's fine for this purpose.
-// Use this in addition to defer cleanup() for normal exits.
-// StartCleanupListener starts a goroutine that listens for shutdown signals (e.g., Ctrl+C or SIGTERM)
-// and cleans up the specified directory before exiting the program.
 // It returns a stop function to disable the listener when you no longer need it.
 // Note: os.Exit is called after cleanup, which skips other defers by design.
 func StartCleanupListener(dir string) (stop func()) {
