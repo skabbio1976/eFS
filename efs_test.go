@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -15,7 +16,7 @@ func TestExtractToTempAndCleanup(t *testing.T) {
 		"root/sub/b.js": {Data: []byte("B")},
 	}
 
-	dir, cleanup, err := ExtractToTemp(mem, "root", "tst")
+	dir, cleanup, err := ExtractToTemp(mem, "root", "tst", "")
 	if err != nil {
 		t.Fatalf("ExtractToTemp error: %v", err)
 	}
@@ -40,7 +41,7 @@ func TestExtractRootDot(t *testing.T) {
 	mem := fstest.MapFS{
 		"a.txt": {Data: []byte("A")},
 	}
-	dir, cleanup, err := ExtractToTemp(mem, ".", "tst")
+	dir, cleanup, err := ExtractToTemp(mem, ".", "tst", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestExtractRootDot(t *testing.T) {
 
 func TestExtractEmptyRootDefaultsToDot(t *testing.T) {
 	mem := fstest.MapFS{"a.txt": {Data: []byte("A")}}
-	dir, cleanup, err := ExtractToTemp(mem, "", "tst")
+	dir, cleanup, err := ExtractToTemp(mem, "", "tst", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func (b badFS) Open(name string) (fs.File, error) {
 func TestErrorPropagates(t *testing.T) {
 	// Force an error when opening the root directory to make WalkDir fail immediately
 	bad := badFS{base: fstest.MapFS{"a.txt": {Data: []byte("A")}}, fail: "."}
-	dir, cleanup, err := ExtractToTemp(bad, ".", "tst")
+	dir, cleanup, err := ExtractToTemp(bad, ".", "tst", "")
 	if err == nil {
 		t.Fatalf("expected error, got none (dir=%q)", dir)
 	}
@@ -98,7 +99,7 @@ func TestConcurrentExtractions(t *testing.T) {
 
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
-			dir, cleanup, err := ExtractToTemp(mem, ".", "concurrent")
+			dir, cleanup, err := ExtractToTemp(mem, ".", "concurrent", "")
 			if err != nil {
 				done <- err
 				return
@@ -140,7 +141,7 @@ func TestLargeFile(t *testing.T) {
 		"small.txt": {Data: []byte("small")},
 	}
 
-	dir, cleanup, err := ExtractToTemp(mem, ".", "large")
+	dir, cleanup, err := ExtractToTemp(mem, ".", "large", "")
 	if err != nil {
 		t.Fatalf("ExtractToTemp error: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestDeepDirectoryHierarchy(t *testing.T) {
 		"a/shallow.txt":                                     {Data: []byte("shallow")},
 	}
 
-	dir, cleanup, err := ExtractToTemp(mem, ".", "deep")
+	dir, cleanup, err := ExtractToTemp(mem, ".", "deep", "")
 	if err != nil {
 		t.Fatalf("ExtractToTemp error: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestSymlinkHandling(t *testing.T) {
 	// Use os.DirFS to read the directory with symlinks
 	fsys := os.DirFS(sourceDir)
 
-	dir, cleanup, err := ExtractToTemp(fsys, ".", "symlink")
+	dir, cleanup, err := ExtractToTemp(fsys, ".", "symlink", "")
 	if err != nil {
 		t.Fatalf("ExtractToTemp error: %v", err)
 	}
@@ -248,5 +249,154 @@ func TestSymlinkHandling(t *testing.T) {
 	}
 	if string(linkData) != "regular content" {
 		t.Errorf("expected symlink to contain 'regular content', got %q", string(linkData))
+	}
+}
+
+func TestExtractFile(t *testing.T) {
+	mem := fstest.MapFS{
+		"config.json": {Data: []byte(`{"key": "value"}`)},
+		"data.txt":    {Data: []byte("Hello, World!")},
+	}
+
+	// Test extracting a JSON file
+	file, cleanup, err := ExtractFile(mem, "config.json", "config", "")
+	if err != nil {
+		t.Fatalf("ExtractFile error: %v", err)
+	}
+	defer cleanup()
+
+	// Verify file exists and has correct content
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("failed to read extracted file: %v", err)
+	}
+	if string(data) != `{"key": "value"}` {
+		t.Errorf("expected %q, got %q", `{"key": "value"}`, string(data))
+	}
+
+	// Verify file has .json extension
+	if filepath.Ext(file) != ".json" {
+		t.Errorf("expected .json extension, got %q", filepath.Ext(file))
+	}
+
+	// Cleanup should remove file
+	cleanup()
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("expected file removed, got err=%v", err)
+	}
+}
+
+func TestExtractFileWithCustomTempDir(t *testing.T) {
+	// Create a custom temp directory
+	customTempDir, err := os.MkdirTemp(".", "custom-temp-")
+	if err != nil {
+		t.Fatalf("failed to create custom temp dir: %v", err)
+	}
+	defer os.RemoveAll(customTempDir)
+
+	// Convert to absolute path for comparison
+	absCustomTempDir, err := filepath.Abs(customTempDir)
+	if err != nil {
+		t.Fatalf("failed to get absolute path: %v", err)
+	}
+
+	mem := fstest.MapFS{
+		"test.txt": {Data: []byte("test content")},
+	}
+
+	file, cleanup, err := ExtractFile(mem, "test.txt", "test", customTempDir)
+	if err != nil {
+		t.Fatalf("ExtractFile error: %v", err)
+	}
+	defer cleanup()
+
+	// Verify file is in the custom temp directory
+	if !strings.HasPrefix(file, absCustomTempDir) {
+		t.Errorf("expected file to be in %q, got %q", absCustomTempDir, file)
+	}
+
+	// Verify content
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("failed to read extracted file: %v", err)
+	}
+	if string(data) != "test content" {
+		t.Errorf("expected 'test content', got %q", string(data))
+	}
+}
+
+func TestExtractToTempWithCustomTempDir(t *testing.T) {
+	// Create a custom temp directory
+	customTempDir, err := os.MkdirTemp(".", "custom-temp-")
+	if err != nil {
+		t.Fatalf("failed to create custom temp dir: %v", err)
+	}
+	defer os.RemoveAll(customTempDir)
+
+	// Convert to absolute path for comparison
+	absCustomTempDir, err := filepath.Abs(customTempDir)
+	if err != nil {
+		t.Fatalf("failed to get absolute path: %v", err)
+	}
+
+	mem := fstest.MapFS{
+		"a.txt":     {Data: []byte("A")},
+		"sub/b.txt": {Data: []byte("B")},
+	}
+
+	dir, cleanup, err := ExtractToTemp(mem, ".", "test", customTempDir)
+	if err != nil {
+		t.Fatalf("ExtractToTemp error: %v", err)
+	}
+	defer cleanup()
+
+	// Verify directory is in the custom temp directory
+	if !strings.HasPrefix(dir, absCustomTempDir) {
+		t.Errorf("expected dir to be in %q, got %q", absCustomTempDir, dir)
+	}
+
+	// Verify files exist
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("expected a.txt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub", "b.txt")); err != nil {
+		t.Fatalf("expected sub/b.txt: %v", err)
+	}
+}
+
+func TestMultipleExtractionsCreateSeparateDirs(t *testing.T) {
+	mem := fstest.MapFS{
+		"file.txt": {Data: []byte("content")},
+	}
+
+	// Extract multiple times
+	dir1, cleanup1, err := ExtractToTemp(mem, ".", "multi", "")
+	if err != nil {
+		t.Fatalf("first extraction failed: %v", err)
+	}
+	defer cleanup1()
+
+	dir2, cleanup2, err := ExtractToTemp(mem, ".", "multi", "")
+	if err != nil {
+		t.Fatalf("second extraction failed: %v", err)
+	}
+	defer cleanup2()
+
+	dir3, cleanup3, err := ExtractToTemp(mem, ".", "multi", "")
+	if err != nil {
+		t.Fatalf("third extraction failed: %v", err)
+	}
+	defer cleanup3()
+
+	// All directories should be different
+	if dir1 == dir2 || dir1 == dir3 || dir2 == dir3 {
+		t.Errorf("expected all directories to be different, got: %q, %q, %q", dir1, dir2, dir3)
+	}
+
+	// All should exist
+	for i, dir := range []string{dir1, dir2, dir3} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("directory %d (%q) should exist: %v", i+1, dir, err)
+		}
 	}
 }
